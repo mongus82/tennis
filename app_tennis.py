@@ -33,14 +33,10 @@ HORARIOS = [
 
 CANCHAS = [f"Cancha {i}" for i in range(1, 7)]
 
-# Precios (ARS) según aranceles vigentes desde 01/10/26
-PRECIO_SOCIO = 8500      # Tarifa base socio diario / referencia hora
-PRECIO_NO_SOCIO = 22000  # Invitados mayores de 11 años
+# Precios individuales (ARS) según aranceles vigentes
+PRECIO_SOCIO = 8500      # Tarifa base socio diario
+PRECIO_NO_SOCIO = 22000  # Tarifa invitado / no socio
 ADICIONAL_LUZ = 3200     # Adicional luz por hora
-
-def get_precio(es_socio: bool, con_luz: bool) -> int:
-    base = PRECIO_SOCIO if es_socio else PRECIO_NO_SOCIO
-    return base + (ADICIONAL_LUZ if con_luz else 0)
 
 def format_precio(monto: int) -> str:
     return f"$ {monto:,}".replace(",", ".")
@@ -181,10 +177,15 @@ def inicializar_socios_demo():
     socios = cargar_socios()
     if not socios:
         socios = [
-            {"id": "S001", "nombre": "Juan Pérez", "email": "juan@email.com", "telefono": "11 5555-0001", "password": hash_password("1234"), "activo": True},
-            {"id": "S002", "nombre": "María Gómez", "email": "maria@email.com", "telefono": "11 5555-0002", "password": hash_password("1234"), "activo": True},
-            {"id": "S003", "nombre": "Carlos López", "email": "carlos@email.com", "telefono": "11 5555-0003", "password": hash_password("1234"), "activo": True},
+            {"id": "S001", "nombre": "Juan Pérez", "email": "juan@email.com", "telefono": "11 5555-0001", "password": hash_password("1234"), "activo": True, "membresia": "Diario", "vencimiento": ""},
+            {"id": "S002", "nombre": "María Gómez", "email": "maria@email.com", "telefono": "11 5555-0002", "password": hash_password("1234"), "activo": True, "membresia": "Mensual", "vencimiento": (datetime.now().date() + timedelta(days=20)).strftime("%Y-%m-%d")},
+            {"id": "S003", "nombre": "Carlos López", "email": "carlos@email.com", "telefono": "11 5555-0003", "password": hash_password("1234"), "activo": True, "membresia": "Trimestral", "vencimiento": (datetime.now().date() + timedelta(days=60)).strftime("%Y-%m-%d")},
         ]
+        guardar_socios(socios)
+    else:
+        for s in socios:
+            if "membresia" not in s: s["membresia"] = "Diario"
+            if "vencimiento" not in s: s["vencimiento"] = ""
         guardar_socios(socios)
     return socios
 
@@ -194,7 +195,7 @@ def autenticar(socio_id: str, password: str):
             return s
     return None
 
-def registrar_socio(nombre, email, telefono, password):
+def registrar_socio(nombre, email, telefono, password, membresia="Diario", vencimiento=""):
     socios = cargar_socios()
     nums = [int(s["id"][1:]) for s in socios if s["id"].startswith("S") and s["id"][1:].isdigit()]
     nuevo_id = f"S{max(nums, default=0) + 1:03d}"
@@ -204,13 +205,14 @@ def registrar_socio(nombre, email, telefono, password):
 
     nuevo = {
         "id": nuevo_id, "nombre": nombre.strip(), "email": email.strip().lower(),
-        "telefono": telefono.strip(), "password": hash_password(password), "activo": True
+        "telefono": telefono.strip(), "password": hash_password(password), "activo": True,
+        "membresia": membresia, "vencimiento": vencimiento
     }
     socios.append(nuevo)
     guardar_socios(socios)
     return nuevo, f"Socio registrado. Tu ID es **{nuevo_id}**."
 
-def actualizar_socio(socio_id, nombre, email, telefono, password_nueva=None, activo=True):
+def actualizar_socio(socio_id, nombre, email, telefono, password_nueva=None, activo=True, membresia="Diario", vencimiento=""):
     socios = cargar_socios()
     for s in socios:
         if s["id"] == socio_id:
@@ -218,6 +220,8 @@ def actualizar_socio(socio_id, nombre, email, telefono, password_nueva=None, act
             s["email"] = email.strip().lower()
             s["telefono"] = telefono.strip()
             s["activo"] = activo
+            s["membresia"] = membresia
+            s["vencimiento"] = vencimiento
             if password_nueva and len(password_nueva.strip()) > 0:
                 s["password"] = hash_password(password_nueva.strip())
             guardar_socios(socios)
@@ -233,7 +237,7 @@ def eliminar_socio(socio_id):
     return False, "No se pudo encontrar al socio."
 
 # ============================================================
-# RESERVAS
+# RESERVAS & CÁLCULO DE PRECIOS
 # ============================================================
 
 def obtener_reservas_dia(fecha_str):
@@ -242,25 +246,56 @@ def obtener_reservas_dia(fecha_str):
 def esta_ocupada(fecha_str, cancha, horario):
     return any(r["cancha"] == cancha and r["horario"] == horario for r in obtener_reservas_dia(fecha_str))
 
-def agregar_reserva(fecha_str, cancha, horario, socio, con_luz, metodo_pago):
+def verificar_membresia_vigente(socio, fecha_str):
+    """Verifica si un socio tiene carnet Mensual o Trimestral activo para la fecha dada"""
+    if not socio or socio.get("membresia") in ["Diario", None]:
+        return False
+    vencimiento = socio.get("vencimiento", "")
+    if not vencimiento:
+        return False
+    try:
+        fecha_res = datetime.strptime(fecha_str, "%Y-%m-%d").date()
+        fecha_venc = datetime.strptime(vencimiento, "%Y-%m-%d").date()
+        return fecha_res <= fecha_venc
+    except ValueError:
+        return False
+
+def calcular_precio_jugador(socio_dict, fecha_str, es_no_socio=False):
+    """Calcula el costo individual de un jugador"""
+    if es_no_socio or socio_dict is None:
+        return PRECIO_NO_SOCIO
+    if verificar_membresia_vigente(socio_dict, fecha_str):
+        return 0
+    return PRECIO_SOCIO
+
+def agregar_reserva(fecha_str, cancha, horario, socio_titular, lista_jugadores, con_luz, metodo_pago):
+    """
+    lista_jugadores: Lista de diccionarios con la estructura:
+    {"nombre": str, "socio": dict/None, "es_no_socio": bool, "precio": int}
+    """
     if esta_ocupada(fecha_str, cancha, horario):
         return False, None, "Esa cancha ya está reservada en ese horario."
 
-    es_socio = socio is not None
-    precio = get_precio(es_socio, con_luz)
-    pagado = metodo_pago in ("Transferencia", "Mercado Pago (simulado)")
+    precio_luz = ADICIONAL_LUZ if con_luz else 0
+    suma_jugadores = sum(j["precio"] for j in lista_jugadores)
+    precio_total = suma_jugadores + precio_luz
+
+    pagado = True if precio_total == 0 else metodo_pago in ("Transferencia", "Mercado Pago (simulado)")
+    nombres_jugadores = [j["nombre"] for j in lista_jugadores]
 
     reserva = {
         "id": f"{fecha_str}_{cancha}_{horario}_{datetime.now().timestamp()}",
         "fecha": fecha_str, "cancha": cancha, "horario": horario,
         "duracion": "60 min", 
-        "socio_id": socio["id"] if es_socio else "INVITADO", 
-        "nombre": socio["nombre"] if es_socio else "No socio",
-        "email": socio["email"] if es_socio else "", 
-        "telefono": socio["telefono"] if es_socio else "", 
-        "precio": precio,
+        "socio_id": socio_titular["id"], 
+        "nombre": socio_titular["nombre"],
+        "jugadores": nombres_jugadores,
+        "email": socio_titular["email"], 
+        "telefono": socio_titular["telefono"], 
+        "precio": precio_total,
         "con_luz": con_luz,
-        "metodo_pago": metodo_pago, "pagado": pagado,
+        "metodo_pago": "Membresías Vigentes" if precio_total == 0 else metodo_pago,
+        "pagado": pagado,
         "creada": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     reservas = cargar_reservas()
@@ -295,8 +330,9 @@ def limpiar_reservas_antiguas():
 # ============================================================
 
 def mensaje_confirmacion(reserva: dict) -> str:
-    estado_pago = "✅ Pagado" if reserva.get("pagado") else "⏳ Pendiente de pago"
+    estado_pago = "✅ Pagado (Incluido)" if reserva.get("precio") == 0 else ("✅ Pagado" if reserva.get("pagado") else "⏳ Pendiente de pago")
     luz_txt = "💡 Con luz (Adicional incl.)" if reserva.get("con_luz") else "☀️ Sin luz"
+    jugadores_str = ", ".join(reserva.get("jugadores", [reserva['nombre']]))
     return (
         f"🎾 *Club de Tenis — Confirmación de Reserva*\n\n"
         f"Hola {reserva['nombre']},\n\n"
@@ -304,15 +340,17 @@ def mensaje_confirmacion(reserva: dict) -> str:
         f"• *Cancha:* {reserva['cancha']}\n"
         f"• *Fecha:* {reserva['fecha']}\n"
         f"• *Horario:* {reserva['horario']} (60 min)\n"
+        f"• *Jugadores:* {jugadores_str}\n"
         f"• *Detalle:* {luz_txt}\n"
-        f"• *Precio:* {format_precio(reserva['precio'])}\n"
+        f"• *Precio Total:* {format_precio(reserva['precio'])}\n"
         f"• *Pago:* {reserva['metodo_pago']} — {estado_pago}\n\n"
         f"¡Te esperamos en la cancha!\nClub de Tenis"
     )
 
 def mensaje_email_html(reserva: dict) -> str:
-    estado = "Pagado ✅" if reserva.get("pagado") else "Pendiente de pago ⏳"
+    estado = "Pagado ✅" if (reserva.get("pagado") or reserva.get("precio") == 0) else "Pendiente de pago ⏳"
     luz_txt = "💡 Con luz" if reserva.get("con_luz") else "☀️ Sin luz"
+    jugadores_str = ", ".join(reserva.get("jugadores", [reserva['nombre']]))
     return f"""
     <html>
     <body style="font-family: Arial, sans-serif; color: #166534;">
@@ -324,8 +362,9 @@ def mensaje_email_html(reserva: dict) -> str:
                 <tr><td style="padding:6px 0;"><strong>Cancha</strong></td><td>{reserva['cancha']}</td></tr>
                 <tr><td style="padding:6px 0;"><strong>Fecha</strong></td><td>{reserva['fecha']}</td></tr>
                 <tr><td style="padding:6px 0;"><strong>Horario</strong></td><td>{reserva['horario']} (60 min)</td></tr>
+                <tr><td style="padding:6px 0;"><strong>Jugadores</strong></td><td>{jugadores_str}</td></tr>
                 <tr><td style="padding:6px 0;"><strong>Iluminación</strong></td><td>{luz_txt}</td></tr>
-                <tr><td style="padding:6px 0;"><strong>Precio</strong></td><td>{format_precio(reserva['precio'])}</td></tr>
+                <tr><td style="padding:6px 0;"><strong>Precio Total</strong></td><td>{format_precio(reserva['precio'])}</td></tr>
                 <tr><td style="padding:6px 0;"><strong>Pago</strong></td><td>{reserva['metodo_pago']} — {estado}</td></tr>
             </table>
             <p style="margin-top: 20px;">¡Te esperamos en la cancha!</p>
@@ -417,7 +456,7 @@ def pantalla_login():
             elif len(pass1) < 4:
                 st.error("Mínimo 4 caracteres.")
             else:
-                socio, msg = registrar_socio(nombre, email, telefono, pass1)
+                socio, msg = registrar_socio(nombre, email, telefono, pass1, "Diario", "")
                 if socio:
                     st.success(msg)
                     st.balloons()
@@ -434,6 +473,8 @@ def pantalla_app():
     with st.sidebar:
         st.markdown(f"### 👤 {socio['nombre']}")
         st.caption(f"ID: {socio['id']}")
+        if socio.get("membresia") in ["Mensual", "Trimestral"]:
+            st.success(f"🎟️ Carnet: {socio['membresia']} (Vto: {socio.get('vencimiento','N/A')})")
         st.divider()
 
         pagina = st.radio(
@@ -446,8 +487,8 @@ def pantalla_app():
         st.markdown("### Turnos")
         st.caption("Duración: **60 minutos**")
         st.caption("08:00 → 21:00")
-        st.markdown("### Tarifas Base")
-        st.caption(f"Socio: **{format_precio(PRECIO_SOCIO)}**")
+        st.markdown("### Tarifas Individuales")
+        st.caption(f"Socio Diario: **{format_precio(PRECIO_SOCIO)}**")
         st.caption(f"No socio: **{format_precio(PRECIO_NO_SOCIO)}**")
         st.caption(f"Adicional Luz: **{format_precio(ADICIONAL_LUZ)}**")
 
@@ -483,36 +524,92 @@ def pantalla_app():
             idx = st.selectbox("Horario", range(len(opciones)), format_func=lambda i: opciones[i])
             horario = libres[idx]
 
-            con_luz = st.checkbox("💡 Incluir Adicional Luz (+ $ 3.200)")
+            st.markdown("---")
+            st.markdown("#### 👥 Modalidad y Jugadores")
 
-            precio_total = get_precio(True, con_luz)
-            st.markdown(f'<span class="precio-badge">Total: {format_precio(precio_total)} · 60 min</span>', unsafe_allow_html=True)
+            num_jugadores = st.radio("Modalidad de Juego", [2, 4], format_func=lambda x: "Singles (2 Jugadores)" if x == 2 else "Dobles (4 Jugadores)", horizontal=True)
+
+            socios_registrados = [s for s in cargar_socios() if s["id"] != socio["id"]]
+            dict_socios = {f"{s['id']} - {s['nombre']} ({s['membresia']})": s for s in socios_registrados}
+
+            lista_jugadores = []
+            
+            # Jugador 1 (Titular que esta reservando)
+            p_j1 = calcular_precio_jugador(socio, fecha_str)
+            lista_jugadores.append({"nombre": socio["nombre"], "socio": socio, "es_no_socio": False, "precio": p_j1})
+
+            # Jugadores adicionales (2, 3 o 4)
+            datos_validos = True
+            cols = st.columns(num_jugadores - 1)
+
+            for i in range(2, num_jugadores + 1):
+                with cols[i-2]:
+                    st.markdown(f"**Jugador {i}:**")
+                    tipo_j = st.radio(f"Categoría J{i}", ["Es Socio", "No Socio"], key=f"tipo_j{i}", horizontal=True)
+                    
+                    if tipo_j == "Es Socio":
+                        if dict_socios:
+                            sel_key = st.selectbox(f"Socio J{i}", list(dict_socios.keys()), key=f"sel_j{i}")
+                            s_obj = dict_socios[sel_key]
+                            p_j = calcular_precio_jugador(s_obj, fecha_str)
+                            lista_jugadores.append({"nombre": s_obj["nombre"], "socio": s_obj, "es_no_socio": False, "precio": p_j})
+                        else:
+                            st.caption("No hay otros socios.")
+                            p_j = PRECIO_SOCIO
+                            lista_jugadores.append({"nombre": f"Jugador {i}", "socio": None, "es_no_socio": False, "precio": p_j})
+                    else:
+                        nom_inv = st.text_input(f"Nombre Invitado J{i}", placeholder="Ej: Juan Pérez", key=f"inv_j{i}")
+                        if not nom_inv.strip():
+                            datos_validos = False
+                        p_j = PRECIO_NO_SOCIO
+                        lista_jugadores.append({"nombre": nom_inv.strip() if nom_inv.strip() else f"Invitado J{i}", "socio": None, "es_no_socio": True, "precio": p_j})
+
+                    st.caption(f"Tarifa J{i}: **{format_precio(p_j)}**")
+
+            con_luz = st.checkbox("💡 Incluir Adicional Luz (+ $ 3.200)")
+            precio_luz = ADICIONAL_LUZ if con_luz else 0
+
+            precio_total = sum(j["precio"] for j in lista_jugadores) + precio_luz
+            st.markdown(f'<span class="precio-badge">Total a Pagar: {format_precio(precio_total)} · 60 min</span>', unsafe_allow_html=True)
 
             st.markdown("---")
             st.markdown("#### Pago")
-            metodo = st.radio("Método de pago", ["Efectivo (en club)", "Transferencia", "Mercado Pago (simulado)"], horizontal=True)
-
-            if metodo == "Transferencia":
-                st.info("Transferí a **CBU 0000003100010000000001** · Alias: **CLUB.TENIS**")
+            if precio_total == 0:
+                st.success("✅ Todas las membresías de los jugadores están activas. No requiere pago adicional.")
+                metodo = "Membresías Vigentes"
+            else:
+                metodo = st.radio("Método de pago", ["Efectivo (en club)", "Transferencia", "Mercado Pago (simulado)"], horizontal=True)
+                if metodo == "Transferencia":
+                    st.info("Transferí a **CBU 0000003100010000000001** · Alias: **CLUB.TENIS**")
 
             if st.button("✅ Confirmar Reserva", type="primary", use_container_width=True):
-                ok, reserva, msg = agregar_reserva(fecha_str, cancha, horario, socio, con_luz, metodo)
-                if ok:
-                    st.success(msg)
-                    st.balloons()
-                    with st.container(border=True):
-                        estado = "✅ Pagado" if reserva["pagado"] else "⏳ Pendiente"
-                        luz_txt = "💡 Con luz" if reserva["con_luz"] else "☀️ Sin luz"
-                        st.markdown(f"**{reserva['cancha']}** · {fecha.strftime('%d/%m/%Y')} · **{horario} hs** ({luz_txt}) \\\n💰 {format_precio(reserva['precio'])} · {estado}")
-                    
-                    c1, c2 = st.columns(2)
-                    with c1: st.link_button("📱 WhatsApp", link_whatsapp(reserva), use_container_width=True)
-                    with c2: 
-                        if st.button("✉️ Enviar Email", use_container_width=True):
-                            ok_m, msg_m = enviar_email(reserva)
-                            (st.success(msg_m) if ok_m else st.warning(msg_m))
+                if not datos_validos:
+                    st.error("Por favor ingresá el nombre de todos los invitados no socios.")
                 else:
-                    st.error(msg)
+                    ok, reserva, msg = agregar_reserva(
+                        fecha_str, cancha, horario, socio, lista_jugadores, con_luz, metodo
+                    )
+                    if ok:
+                        st.success(msg)
+                        st.balloons()
+                        with st.container(border=True):
+                            estado = "✅ Pagado" if reserva["pagado"] else "⏳ Pendiente"
+                            luz_txt = "💡 Con luz" if reserva["con_luz"] else "☀️ Sin luz"
+                            jugs_str = ", ".join(reserva["jugadores"])
+                            st.markdown(
+                                f"**{reserva['cancha']}** · {fecha.strftime('%d/%m/%Y')} · **{horario} hs** ({luz_txt}) \\\n"
+                                f"👥 **Jugadores:** {jugs_str} \\\n"
+                                f"💰 Total: {format_precio(reserva['precio'])} · {estado}"
+                            )
+                        
+                        c1, c2 = st.columns(2)
+                        with c1: st.link_button("📱 WhatsApp", link_whatsapp(reserva), use_container_width=True)
+                        with c2: 
+                            if st.button("✉️ Enviar Email", use_container_width=True):
+                                ok_m, msg_m = enviar_email(reserva)
+                                (st.success(msg_m) if ok_m else st.warning(msg_m))
+                    else:
+                        st.error(msg)
 
     # ---------- DISPONIBILIDAD ----------
     elif pagina == "Ver Disponibilidad":
@@ -522,12 +619,15 @@ def pantalla_app():
         reservas_dia = obtener_reservas_dia(fecha_str)
 
         datos = []
-        precio_base_str = format_precio(PRECIO_SOCIO)
         for horario in HORARIOS:
             fila = {"Horario": f"{horario} hs"}
             for cancha in CANCHAS:
                 r = next((x for x in reservas_dia if x["cancha"] == cancha and x["horario"] == horario), None)
-                fila[cancha] = f"🔴 {r['nombre']}" if r else f"🟢 {precio_base_str}"
+                if r:
+                    jugs = r.get("jugadores", [r["nombre"]])
+                    fila[cancha] = f"🔴 {', '.join(jugs)}"
+                else:
+                    fila[cancha] = f"🟢 Libre"
             datos.append(fila)
 
         st.dataframe(pd.DataFrame(datos), use_container_width=True, hide_index=True)
@@ -543,16 +643,17 @@ def pantalla_app():
         else:
             for r in mias:
                 with st.container(border=True):
-                    c1, c2, c3 = st.columns([3, 1, 1])
-                    with c1:
-                        pago_txt = '<span class="pago-ok">✅ Pagado</span>' if r.get("pagado") else '<span class="pago-pendiente">⏳ Pendiente</span>'
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    with col1:
+                        pago_txt = '<span class="pago-ok">✅ Incluido / Pagado</span>' if (r.get("pagado") or r.get("precio") == 0) else '<span class="pago-pendiente">⏳ Pendiente</span>'
                         luz_txt = "💡 Con luz" if r.get("con_luz") else "☀️ Sin luz"
-                        st.markdown(f"**{r['cancha']}** · {r['fecha']} · **{r['horario']} hs** ({luz_txt}) \\\n💰 {format_precio(r['precio'])} · {pago_txt}", unsafe_allow_html=True)
-                    with c2:
-                        if not r.get("pagado") and st.button("💳 Pagar", key=f"pay_{r['id']}"):
+                        jugs_str = ", ".join(r.get("jugadores", [r["nombre"]]))
+                        st.markdown(f"**{r['cancha']}** · {r['fecha']} · **{r['horario']} hs** ({luz_txt}) \\\n👥 {jugs_str} \\\n💰 {format_precio(r['precio'])} · {pago_txt}", unsafe_allow_html=True)
+                    with col2:
+                        if not r.get("pagado") and r.get("precio") > 0 and st.button("💳 Pagar", key=f"pay_{r['id']}"):
                             marcar_pagado(r["id"])
                             st.rerun()
-                    with c3:
+                    with col3:
                         if st.button("🗑️ Cancelar", key=f"cancel_{r['id']}"):
                             cancelar_reserva(r["id"])
                             st.rerun()
@@ -605,13 +706,13 @@ def pantalla_app():
             with tab_res:
                 proximas = [r for r in cargar_reservas() if datetime.strptime(r["fecha"], "%Y-%m-%d").date() >= datetime.now().date()]
                 if proximas:
-                    st.dataframe(pd.DataFrame(proximas)[["fecha", "horario", "cancha", "nombre", "precio", "con_luz", "metodo_pago", "pagado"]], use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(proximas)[["fecha", "horario", "cancha", "nombre", "jugadores", "precio", "con_luz", "metodo_pago", "pagado"]], use_container_width=True, hide_index=True)
                 if st.button("⚠️ Borrar TODAS las reservas", type="primary"):
                     guardar_reservas([])
                     st.rerun()
 
             with tab_soc:
-                st.markdown("### 👥 Administración de Usuarios / Socios")
+                st.markdown("### 👥 Administración de Usuarios / Socios y Membresías")
                 socios = cargar_socios()
 
                 df_soc = pd.DataFrame(socios)
@@ -624,8 +725,8 @@ def pantalla_app():
 
                 st.divider()
                 
-                st.markdown("#### ✏️ Modificar o Eliminar un Socio")
-                opciones_socios = {f"{s['id']} - {s['nombre']} ({s['email']})": s for s in socios}
+                st.markdown("#### ✏️ Modificar Membresía, Datos o Eliminar Socio")
+                opciones_socios = {f"{s['id']} - {s['nombre']} ({s['membresia']})": s for s in socios}
                 
                 if opciones_socios:
                     socio_sel_key = st.selectbox("Seleccioná un socio a gestionar", list(opciones_socios.keys()))
@@ -636,14 +737,28 @@ def pantalla_app():
                         with col_a:
                             edit_nombre = st.text_input("Nombre completo", value=s_sel["nombre"])
                             edit_email = st.text_input("Email", value=s_sel["email"])
+                            
+                            tipos_membresia = ["Diario", "Mensual", "Trimestral"]
+                            idx_memb = tipos_membresia.index(s_sel.get("membresia", "Diario")) if s_sel.get("membresia") in tipos_membresia else 0
+                            edit_membresia = st.selectbox("Tipo de Membresía", tipos_membresia, index=idx_memb)
+
                         with col_b:
                             edit_tel = st.text_input("Teléfono", value=s_sel["telefono"])
-                            edit_pass = st.text_input("Nueva Contraseña (dejar en blanco para mantener)", type="password")
-                        
+                            edit_pass = st.text_input("Nueva Contraseña (dejar en blanco)", type="password")
+                            
+                            venc_actual = datetime.now().date()
+                            if s_sel.get("vencimiento"):
+                                try:
+                                    venc_actual = datetime.strptime(s_sel["vencimiento"], "%Y-%m-%d").date()
+                                except ValueError:
+                                    pass
+                            edit_vencimiento = st.date_input("Fecha de Vencimiento Carnet", value=venc_actual)
+
                         edit_activo = st.checkbox("Cuenta Activa", value=s_sel.get("activo", True))
 
                         if st.form_submit_button("💾 Guardar Cambios"):
-                            ok, msg = actualizar_socio(s_sel["id"], edit_nombre, edit_email, edit_tel, edit_pass, edit_activo)
+                            venc_str = edit_vencimiento.strftime("%Y-%m-%d") if edit_membresia != "Diario" else ""
+                            ok, msg = actualizar_socio(s_sel["id"], edit_nombre, edit_email, edit_tel, edit_pass, edit_activo, edit_membresia, venc_str)
                             if ok:
                                 st.success(msg)
                                 st.rerun()
@@ -666,21 +781,24 @@ def pantalla_app():
                             st.warning("Debes marcar la casilla de confirmación para eliminar al socio.")
 
                 st.divider()
-                st.markdown("#### ➕ Registrar Nuevo Socio Manualmente")
+                st.markdown("#### ➕ Registrar Nuevo Socio y Membresía")
                 with st.form("form_nuevo_socio"):
                     c1, c2 = st.columns(2)
                     with c1:
                         new_nombre = st.text_input("Nombre completo")
                         new_email = st.text_input("Email")
+                        new_membresia = st.selectbox("Tipo de Membresía", ["Diario", "Mensual", "Trimestral"], key="new_memb")
                     with c2:
                         new_tel = st.text_input("Teléfono")
                         new_pass = st.text_input("Contraseña", type="password")
+                        new_venc = st.date_input("Fecha de Vencimiento Carnet", value=datetime.now().date(), key="new_venc")
                     
                     if st.form_submit_button("➕ Crear Socio"):
                         if not all([new_nombre, new_email, new_tel, new_pass]):
-                            st.error("Completá todos los campos.")
+                            st.error("Completá todos los campos obligatorios.")
                         else:
-                            ns, msg = registrar_socio(new_nombre, new_email, new_tel, new_pass)
+                            venc_str = new_venc.strftime("%Y-%m-%d") if new_membresia != "Diario" else ""
+                            ns, msg = registrar_socio(new_nombre, new_email, new_tel, new_pass, new_membresia, venc_str)
                             if ns:
                                 st.success(msg)
                                 st.rerun()
