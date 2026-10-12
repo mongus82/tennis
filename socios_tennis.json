@@ -1,0 +1,34 @@
+[
+  {
+    "id": "seba",
+    "nombre": "Juan Pérez",
+    "email": "juan@email.com",
+    "telefono": "11 5555-0001",
+    "password": "1234",
+    "activo": true
+  },
+  {
+    "id": "S002",
+    "nombre": "María Gómez",
+    "email": "maria@email.com",
+    "telefono": "11 5555-0002",
+    "password": "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4",
+    "activo": true
+  },
+  {
+    "id": "S003",
+    "nombre": "Carlos López",
+    "email": "carlos@email.com",
+    "telefono": "11 5555-0003",
+    "password": "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4",
+    "activo": true
+  },
+  {
+    "id": "S004",
+    "nombre": "seba",
+    "email": "sebafilomia@gmail.com",
+    "telefono": "112129622",
+    "password": "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4",
+    "activo": true
+  }
+]
